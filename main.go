@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
-	"runtime"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -189,32 +192,146 @@ func getRootURL(rawURL string) (string, error) {
 	return u.String(), nil
 }
 
-type SysInfo struct {
-	arch string
-	os   string
+func getIndex(mirror string) (map[string]Release, error) {
+	u, err := url.Parse(mirror)
+	if err != nil {
+		return nil, err
+	}
+	index_url := u.JoinPath("index.json")
+
+	resp, err := http.Get(index_url.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("Sc not OK")
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	m, err := parseReleases(data)
+	return m, err
 }
 
-func (s SysInfo) String() string {
-	return fmt.Sprintf("%s-%s", s.arch, s.os)
+func versionsFromReleases(m map[string]Release) []*Version {
+	versions := make([]*Version, 0, len(m))
+	for k, _ := range m {
+		v, err := NewVersion(k)
+		if err == nil {
+			versions = append(versions, v)
+		}
+	}
+	slices.SortFunc(versions, cmpVersions)
+	return versions
 }
 
-func getSysInfo() SysInfo {
-	arch := map[string]string{
-		"386":     "x86",
-		"amd64":   "x86_64",
-		"arm64":   "aarch64",
-		"loong64": "loongarch64",
-		"ppc64":   "powerpc64",
-		"ppc64le": "powerpc64le",
+func getConfigDir() string {
+	path, err := os.UserConfigDir()
+	if err != nil {
+		return "."
 	}
-	if v, ok := arch[runtime.GOARCH]; ok {
-		return SysInfo{v, runtime.GOOS}
+	res := filepath.Join(path, "zvm")
+	err = os.MkdirAll(res, 0755)
+	if err != nil {
+		return "."
 	}
-	return SysInfo{runtime.GOARCH, runtime.GOOS}
+	return res
+}
+
+func getShareDir() string {
+	path, err := os.UserHomeDir()
+	if err != nil {
+		return "."
+	}
+	res := filepath.Join(path, ".local", "share", "zvm")
+	err = os.MkdirAll(res, 0755)
+	if err != nil {
+		return "."
+	}
+	return res
+}
+
+func StoreMirrorList(mirrors []string) error {
+	fpath := filepath.Join(getConfigDir(), "mirrorlist.txt")
+	f, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, m := range mirrors {
+		f.WriteString(m + "\n")
+	}
+	return nil
+}
+
+func ReadMirrorList() ([]string, error) {
+	fpath := filepath.Join(getConfigDir(), "mirrorlist.txt")
+	f, err := os.Open(fpath)
+	if err != nil {
+		return nil, err
+	}
+	mirrors := []string{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		mirrors = append(mirrors, line)
+	}
+	if err = scanner.Err(); err != nil {
+		return nil, err
+	}
+	return mirrors, nil
+}
+
+func printHelp() {
+	a := `Usage: zvm <action>
+Actions:
+  - set <zig/zls/toolchain(both)> <version> - set version of zig, zls or both if it is possible
+  - get/list <zig/zls/toolchain(both)> - print selected version / list all available versions
+  - update - updates to last patch if on stable branch, uses last dev version on master
+  - mirrors <update/list> - update mirrors , list them
+  e.g: zvm set zig 0.17.0`
+	println(a)
+}
+
+func doSet(a []string) {
+
+}
+
+func doGet(a []string) {
+
+}
+
+func doList(a []string) {
+
+}
+
+func doUpdate(a []string) {
+
+}
+
+func doMirrors(a []string) {
+
+}
+
+func parseCommand() {
+	act := os.Args[1]
+	mp := map[string](func([]string)){
+		"set":  doSet,
+		"get":  doGet,
+		"list": doList,
+	}
+
+	if f, ok := mp[act]; ok {
+		f(os.Args[2:])
+	} else {
+		printHelp()
+	}
 }
 
 func main() {
-	sysinfo := getSysInfo()
+	sysinfo := GetSysInfo()
 	println(sysinfo.String())
 	mirrors := []string{"https://ziglang.org/download/"}
 	mirrors_url := "https://ziglang.org/download/community-mirrors.txt"
@@ -222,8 +339,21 @@ func main() {
 	if err == nil {
 		mirrors = append(mirrors, m...)
 	}
+
 	fmt.Println(mirrors)
 
 	d := Downloader{mirrors: mirrors}
 	d.RankMirrors()
+	StoreMirrorList(d.mirrors)
+
+	releases, err := getIndex(mirrors[0])
+	if err == nil {
+		for k, _ := range releases {
+			println(k)
+		}
+		r := versionsFromReleases(releases)
+		for _, v := range r {
+			println(v.String())
+		}
+	}
 }
