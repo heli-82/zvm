@@ -9,11 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
+	"path"
 	"slices"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/jedisct1/go-minisign"
 )
 
 func GetMirrors(url string) ([]string, error) {
@@ -86,7 +87,7 @@ func (r *Release) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func parseReleases(data []byte) (map[string]Release, error) {
+func parseIndex(data []byte) (map[string]Release, error) {
 	var r map[string]Release
 	err := json.Unmarshal(data, &r)
 	if err != nil {
@@ -178,6 +179,58 @@ func (d *Downloader) RankMirrors() []PingResult {
 	return ping_results
 }
 
+func DownloadFile(url, path string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	out, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+var InvalidSignature = errors.New("Invalid signature")
+
+func VerifyMinisig(filePath, minisigPath, publicKey string) error {
+	pk, err := minisign.NewPublicKey(publicKey)
+	if err != nil {
+		return err
+	}
+
+	sigdata, err := os.ReadFile(minisigPath)
+	if err != nil {
+		return err
+	}
+
+	signature, err := minisign.DecodeSignature(string(sigdata))
+	if err != nil {
+		return err
+	}
+	valid, err := pk.VerifyFromFile(filePath, signature)
+	if err != nil {
+		return err
+	}
+
+	if !valid {
+		return InvalidSignature
+	}
+
+	return nil
+}
+
+func getFilenameFromURL(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	return path.Base(u.Path), nil
+}
+
 func getRootURL(rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -211,7 +264,7 @@ func getIndex(mirror string) (map[string]Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	m, err := parseReleases(data)
+	m, err := parseIndex(data)
 	return m, err
 }
 
@@ -227,133 +280,11 @@ func versionsFromReleases(m map[string]Release) []*Version {
 	return versions
 }
 
-func getConfigDir() string {
-	path, err := os.UserConfigDir()
-	if err != nil {
-		return "."
-	}
-	res := filepath.Join(path, "zvm")
-	err = os.MkdirAll(res, 0755)
-	if err != nil {
-		return "."
-	}
-	return res
-}
-
-func getShareDir() string {
-	path, err := os.UserHomeDir()
-	if err != nil {
-		return "."
-	}
-	res := filepath.Join(path, ".local", "share", "zvm")
-	err = os.MkdirAll(res, 0755)
-	if err != nil {
-		return "."
-	}
-	return res
-}
-
-func StoreMirrorList(mirrors []string) error {
-	fpath := filepath.Join(getConfigDir(), "mirrorlist.txt")
-	f, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	for _, m := range mirrors {
-		f.WriteString(m + "\n")
-	}
-	return nil
-}
-
-func ReadMirrorList() ([]string, error) {
-	fpath := filepath.Join(getConfigDir(), "mirrorlist.txt")
-	f, err := os.Open(fpath)
-	if err != nil {
-		return nil, err
-	}
-	mirrors := []string{}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		mirrors = append(mirrors, line)
-	}
-	if err = scanner.Err(); err != nil {
-		return nil, err
-	}
-	return mirrors, nil
-}
-
-func printHelp() {
-	a := `Usage: zvm <action>
-Actions:
-  - set <zig/zls/toolchain(both)> <version> - set version of zig, zls or both if it is possible
-  - get/list <zig/zls/toolchain(both)> - print selected version / list all available versions
-  - update - updates to last patch if on stable branch, uses last dev version on master
-  - mirrors <update/list> - update mirrors , list them
-  e.g: zvm set zig 0.17.0`
-	println(a)
-}
-
-func doSet(a []string) {
-
-}
-
-func doGet(a []string) {
-
-}
-
-func doList(a []string) {
-
-}
-
-func doUpdate(a []string) {
-
-}
-
-func doMirrors(a []string) {
-
-}
-
-func parseCommand() {
-	act := os.Args[1]
-	mp := map[string](func([]string)){
-		"set":  doSet,
-		"get":  doGet,
-		"list": doList,
-	}
-
-	if f, ok := mp[act]; ok {
-		f(os.Args[2:])
-	} else {
-		printHelp()
-	}
-}
-
 func main() {
-	sysinfo := GetSysInfo()
-	println(sysinfo.String())
-	mirrors := []string{"https://ziglang.org/download/"}
-	mirrors_url := "https://ziglang.org/download/community-mirrors.txt"
-	m, err := GetMirrors(mirrors_url)
-	if err == nil {
-		mirrors = append(mirrors, m...)
+	e, err := NewExecutor()
+	if err != nil {
+		panic(err)
 	}
-
-	fmt.Println(mirrors)
-
-	d := Downloader{mirrors: mirrors}
-	d.RankMirrors()
-	StoreMirrorList(d.mirrors)
-
-	releases, err := getIndex(mirrors[0])
-	if err == nil {
-		for k, _ := range releases {
-			println(k)
-		}
-		r := versionsFromReleases(releases)
-		for _, v := range r {
-			println(v.String())
-		}
-	}
+	defer e.deinit()
+	e.parseCommand()
 }
