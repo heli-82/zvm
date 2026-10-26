@@ -1,11 +1,26 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 )
+
+func Symlink(target, link string) error {
+	tmp := link + ".tmp"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(target, tmp); err != nil {
+		return err
+	}
+	return os.Rename(tmp, link)
+}
 
 type Executor struct {
 	downloader    Downloader
@@ -15,10 +30,23 @@ type Executor struct {
 	config        Config
 }
 
+func (e *Executor) lockExec() error {
+	f, err := os.OpenFile(filepath.Join(getShareDir(), "zvm.lock"), os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return UnableToLockProcess
+	}
+	e.lockf = f
+	return nil
+}
+
 func (e *Executor) deinit() {
-	e.lockf.Close()
-	lockfp := filepath.Join(getShareDir(), "zvm.lock")
-	_ = os.Remove(lockfp)
+	if e.lockf != nil {
+		e.lockf.Close()
+	}
 }
 
 func NewExecutor() (e Executor, err error) {
@@ -44,20 +72,6 @@ func NewExecutor() (e Executor, err error) {
 
 var UnableToLockProcess = errors.New("Unable to create lock file")
 
-func (e *Executor) lockExec() error {
-	lockfp := filepath.Join(getShareDir(), "zvm.lock")
-	_, err := os.Stat(lockfp)
-	if err != nil {
-		lockf, err := os.Create(lockfp)
-		if err != nil {
-			return err
-		}
-		e.lockf = lockf
-		return nil
-	}
-	return UnableToLockProcess
-}
-
 var NotEnoughArgs = errors.New("Not enough arguments")
 var InvalidArgument = errors.New("Invalid argiment")
 var VersionNotExist = errors.New("Version not exist")
@@ -68,7 +82,7 @@ func (e *Executor) setZigVersion(v string) error {
 	if p, ok := e.localversions.Zig[v]; ok {
 		target := filepath.Join(getBinDir(), "zig")
 		source := filepath.Join(p, "zig")
-		err := os.Symlink(source, target)
+		err := Symlink(source, target)
 		return err
 	} else {
 		return WasntDownloadedYet
@@ -79,22 +93,34 @@ func (e *Executor) setZlsVersion(v string) error {
 	if p, ok := e.localversions.Zls[v]; ok {
 		target := filepath.Join(getBinDir(), "zls")
 		source := filepath.Join(p, "zls")
-		err := os.Symlink(source, target)
+		err := Symlink(source, target)
 		return err
 	} else {
 		return WasntDownloadedYet
 	}
 }
 
-func (e *Executor) getReleases() map[string]Release {
-	var releases map[string]Release
+var dlClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: 15 * time.Second,
+	},
+}
+
+func (e *Executor) getReleases() (map[string]Release, error) {
+	var lastErr error
 	for _, m := range e.downloader.mirrors {
+		fmt.Printf("Trying %s\n", m)
 		index, err := getIndex(m)
 		if err == nil {
-			releases = index
+			return index, nil
 		}
+		lastErr = err
 	}
-	return releases
+	if lastErr == nil {
+		lastErr = errors.New("no mirrors configured")
+	}
+	return nil, lastErr
 }
 
 func (e *Executor) getZigVersion(v string) error {
@@ -102,8 +128,11 @@ func (e *Executor) getZigVersion(v string) error {
 		println("Already downloaded")
 		return nil
 	}
-
-	release, ok := e.getReleases()[v]
+	r, err := e.getReleases()
+	if err != nil {
+		return err
+	}
+	release, ok := r[v]
 	if !ok {
 		return VersionNotExist
 	}
@@ -152,7 +181,7 @@ func (e *Executor) getZigVersion(v string) error {
 	zigPath := filepath.Join(zigDir, "zig")
 	exeName := e.getExeName("zig", v)
 	binPath := filepath.Join(getBinDir(), exeName)
-	err = os.Symlink(zigPath, binPath)
+	err = Symlink(zigPath, binPath)
 	if err != nil {
 		return err
 	}
@@ -170,19 +199,58 @@ func (e *Executor) getExeName(prog, version string) string {
 	return prog + version
 }
 
-func (e *Executor) getZlsVersion(v string) error {
-	if _, ok := e.localversions.Zls[v]; ok {
+const zlsSelectURL = "https://releases.zigtools.org/v1/zls/select-version"
+
+func selectZls(zigVersion string) (Release, error) {
+	q := url.Values{"zig_version": {zigVersion}, "compatibility": {"full"}}
+	resp, err := httpClient.Get(zlsSelectURL + "?" + q.Encode())
+	if err != nil {
+		return Release{}, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Release{}, err
+	}
+
+	var r Release
+	if err := json.Unmarshal(data, &r); err != nil {
+		return r, err
+	}
+	if r.Version == "" { // error response: {"code":..,"message":..}
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		return r, fmt.Errorf("zls select-version (zig %s): %s", zigVersion, e.Message)
+	}
+	return r, nil
+}
+
+func (e *Executor) getZlsVersion(version string) error {
+	if _, ok := e.localversions.Zls[version]; ok {
 		println("Already downloaded")
 		return nil
 	}
+	v := version
 	if v == "master" {
-		v = e.getReleases()[v].Version
+		r, _ := e.getReleases()
+		v = r["master"].Version
+	}
+
+	rel, err := selectZls(v)
+	if err != nil {
+		return err
+	}
+	artifact, ok := rel.Artifacts[e.sysinfo.String()]
+	if !ok {
+		return ReleaseNotExist
 	}
 
 	// "https://builds.zigtools.org/zls-x86_64-linux-0.17.0.tar.xz"
-	url := "https://builds.zigtools.org/zls"
+	// url := "https://builds.zigtools.org/zls"
 
-	tarballUrl := fmt.Sprintf("%s-%s-%s.tar.xz", url, e.sysinfo.String(), v)
+	tarballUrl := artifact.Tarball
 	tarballName, err := getFilenameFromURL(tarballUrl)
 	if err != nil {
 		return err
@@ -220,14 +288,14 @@ func (e *Executor) getZlsVersion(v string) error {
 	}
 
 	zlsPath := filepath.Join(zlsDir, "zls")
-	exeName := e.getExeName("zls", v)
+	exeName := e.getExeName("zls", version)
 	binPath := filepath.Join(getBinDir(), exeName)
-	err = os.Symlink(zlsPath, binPath)
+	err = Symlink(zlsPath, binPath)
 	if err != nil {
 		return err
 	}
 
-	e.localversions.Zls[v] = zlsDir
+	e.localversions.Zls[version] = zlsDir
 	e.localversions.Store()
 
 	return nil
@@ -249,7 +317,11 @@ func (e *Executor) doSet(a []string) error {
 			if err == nil {
 				zigPath := filepath.Join(getBinDir(), "zig")
 				zigVPath := filepath.Join(getBinDir(), e.getExeName("zig", v))
-				err = os.Symlink(zigVPath, zigPath)
+				err = Symlink(zigVPath, zigPath)
+				if err != nil {
+					e.config.ZigVersion = v
+					e.config.Store()
+				}
 			}
 		}
 		return err
@@ -264,7 +336,11 @@ func (e *Executor) doSet(a []string) error {
 			if err == nil {
 				zlsPath := filepath.Join(getBinDir(), "zls")
 				zlsVPath := filepath.Join(getBinDir(), e.getExeName("zls", v))
-				err = os.Symlink(zlsVPath, zlsPath)
+				err = Symlink(zlsVPath, zlsPath)
+				if err != nil {
+					e.config.ZlsVersion = v
+					e.config.Store()
+				}
 			}
 		}
 		return err
@@ -385,7 +461,7 @@ func (e *Executor) doMirrors(a []string) error {
 			if res.Err != nil {
 				sym = '-'
 			}
-			fmt.Printf("[%c] %s", sym, res.Url)
+			fmt.Printf("[%c] %s\n", sym, res.Url)
 		}
 		err := StoreMirrorList(e.downloader.mirrors)
 		if err != nil {
@@ -419,7 +495,8 @@ func (e *Executor) parseCommand() {
 	if f, ok := mp[act]; ok {
 		err := f(os.Args[2:])
 		if err != nil {
-			println(err.Error())
+			fmt.Fprintln(os.Stderr, "zvm:", err)
+			os.Exit(1)
 		}
 	} else {
 		println("Invalid command: ", act)

@@ -25,7 +25,7 @@ func LoadConfig() (c Config, err error) {
 }
 
 func (c *Config) Store() error {
-	dat, err := json.Marshal(c)
+	dat, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
 		return err
 	}

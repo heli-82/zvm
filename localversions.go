@@ -12,6 +12,7 @@ type LocalVersions struct {
 }
 
 func LoadLocalVersons() (l LocalVersions, err error) {
+	l = LocalVersions{Zig: map[string]string{}, Zls: map[string]string{}}
 	versionspath := filepath.Join(getShareDir(), "versions.json")
 	dat, err := os.ReadFile(versionspath)
 	if err != nil {
@@ -25,7 +26,7 @@ func LoadLocalVersons() (l LocalVersions, err error) {
 }
 
 func (l *LocalVersions) Store() error {
-	dat, err := json.Marshal(l)
+	dat, err := json.MarshalIndent(l, "", "\t")
 	if err != nil {
 		return err
 	}

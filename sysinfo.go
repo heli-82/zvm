@@ -23,8 +23,12 @@ func GetSysInfo() SysInfo {
 		"ppc64":   "powerpc64",
 		"ppc64le": "powerpc64le",
 	}
-	if v, ok := arch[runtime.GOARCH]; ok {
-		return SysInfo{v, runtime.GOOS}
+	os := runtime.GOOS
+	if os == "darwin" {
+		os = "macos"
 	}
-	return SysInfo{runtime.GOARCH, runtime.GOOS}
+	if v, ok := arch[runtime.GOARCH]; ok {
+		return SysInfo{v, os}
+	}
+	return SysInfo{runtime.GOARCH, os}
 }

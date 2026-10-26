@@ -180,17 +180,24 @@ func (d *Downloader) RankMirrors() []PingResult {
 }
 
 func DownloadFile(url, path string) error {
+	name, _ := getFilenameFromURL(url)
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: status %d", url, resp.StatusCode)
+	}
 	out, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
+
+	p := newProgress("Downloading "+name, resp.ContentLength)
+	_, err = io.Copy(io.MultiWriter(out, p), resp.Body)
+	p.finish(err)
 	return err
 }
 
@@ -245,27 +252,26 @@ func getRootURL(rawURL string) (string, error) {
 	return u.String(), nil
 }
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 func getIndex(mirror string) (map[string]Release, error) {
 	u, err := url.Parse(mirror)
 	if err != nil {
 		return nil, err
 	}
-	index_url := u.JoinPath("index.json")
-
-	resp, err := http.Get(index_url.String())
+	resp, err := httpClient.Get(u.JoinPath("index.json").String())
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("Sc not OK")
+		return nil, fmt.Errorf("%s: status %d", mirror, resp.StatusCode)
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	m, err := parseIndex(data)
-	return m, err
+	return parseIndex(data)
 }
 
 func versionsFromReleases(m map[string]Release) []*Version {
@@ -283,7 +289,8 @@ func versionsFromReleases(m map[string]Release) []*Version {
 func main() {
 	e, err := NewExecutor()
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, "zvm:", err)
+		os.Exit(1)
 	}
 	defer e.deinit()
 	e.parseCommand()

@@ -24,6 +24,14 @@ func Extract(archivePath, targetDir string) (string, error) {
 	return "", UnsupportedArchiveType
 }
 
+func archiveBaseName(p string) string {
+	n := filepath.Base(p)
+	for _, s := range []string{".tar.xz", ".zip"} {
+		n = strings.TrimSuffix(n, s)
+	}
+	return n
+}
+
 func ExtractTarXz(archivePath, targetDir string) (string, error) {
 	file, err := os.Open(archivePath)
 	if err != nil {
@@ -35,10 +43,15 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize xz reader: %w", err)
 	}
-
 	tarReader := tar.NewReader(xzReader)
 
-	var topDir string
+	tmp, err := os.MkdirTemp(targetDir, ".extract-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmp) // no-op after a successful rename
+
+	prefix := filepath.Clean(tmp) + string(os.PathSeparator)
 
 	for {
 		header, err := tarReader.Next()
@@ -49,16 +62,10 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 			return "", fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		if topDir == "" {
-			name := filepath.ToSlash(header.Name)
-			if i := strings.IndexByte(name, '/'); i >= 0 {
-				topDir = name[:i]
-			} else {
-				topDir = name
-			}
+		target := filepath.Join(tmp, header.Name)
+		if target != filepath.Clean(tmp) && !strings.HasPrefix(target, prefix) {
+			return "", fmt.Errorf("illegal path in archive: %s", header.Name)
 		}
-
-		target := filepath.Join(targetDir, header.Name)
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -70,12 +77,10 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return "", fmt.Errorf("failed to create parent directory: %w", err)
 			}
-
 			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, header.FileInfo().Mode())
 			if err != nil {
 				return "", fmt.Errorf("failed to create output file: %w", err)
 			}
-
 			if _, err := io.Copy(outFile, tarReader); err != nil {
 				outFile.Close()
 				return "", fmt.Errorf("failed to write file content: %w", err)
@@ -84,7 +89,31 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 		}
 	}
 
-	return filepath.Join(targetDir, topDir), nil
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		return "", err
+	}
+
+	var name, src string
+	if len(entries) == 1 && entries[0].IsDir() {
+		name = entries[0].Name()
+		src = filepath.Join(tmp, name)
+	} else {
+		name = archiveBaseName(archivePath)
+		src = tmp
+		if err := os.Chmod(tmp, 0755); err != nil { // MkdirTemp makes it 0700
+			return "", err
+		}
+	}
+
+	dst := filepath.Join(targetDir, name)
+	if err := os.RemoveAll(dst); err != nil {
+		return "", err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return "", err
+	}
+	return dst, nil
 }
 
 func ExtractZip(archivePath, targetDir string) (string, error) {
