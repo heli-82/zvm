@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"sync"
 	"time"
@@ -202,6 +204,7 @@ func DownloadFile(url, path string) error {
 }
 
 var InvalidSignature = errors.New("Invalid signature")
+var InvalidComment = errors.New("Invalid comment")
 
 func VerifyMinisig(filePath, minisigPath, publicKey string) error {
 	pk, err := minisign.NewPublicKey(publicKey)
@@ -225,6 +228,15 @@ func VerifyMinisig(filePath, minisigPath, publicKey string) error {
 
 	if !valid {
 		return InvalidSignature
+	}
+
+	re := regexp.MustCompile(`^trusted comment: timestamp:\d+\tfile:(.*)\thashed$`)
+	match := re.FindStringSubmatch(signature.TrustedComment)
+	if len(match) != 2 {
+		return errors.New("Trusted comment does not match")
+	}
+	if match[1] != filepath.Base(filePath) {
+		return errors.New("Invalid filename")
 	}
 
 	return nil

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 )
@@ -147,10 +148,11 @@ func (e *Executor) getZigVersion(v string) error {
 		return err
 	}
 	tarballPath := filepath.Join(getShareDir(), tarballName)
-
-	err = DownloadFile(tarballUrl, tarballPath)
-	if err != nil {
-		return err
+	if !fileExists(tarballPath) {
+		err = DownloadFile(tarballUrl, tarballPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	minisigUrl := tarballUrl + ".minisig"
@@ -161,12 +163,16 @@ func (e *Executor) getZigVersion(v string) error {
 	}
 	minisigPath := filepath.Join(getShareDir(), minisigName)
 
-	err = DownloadFile(minisigUrl, minisigPath)
-	if err != nil {
-		return err
+	if !fileExists(minisigPath) {
+		err = DownloadFile(minisigUrl, minisigPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	publicKey := "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+
+	println("Verifying downloaded files")
 
 	err = VerifyMinisig(tarballPath, minisigPath, publicKey)
 	if err != nil {
@@ -190,6 +196,14 @@ func (e *Executor) getZigVersion(v string) error {
 	e.localversions.Store()
 
 	return nil
+}
+
+func fileExists(filePath string) bool {
+	stat, err := os.Stat(filePath)
+	if err == nil {
+		return !stat.IsDir()
+	}
+	return false
 }
 
 func (e *Executor) getExeName(prog, version string) string {
@@ -247,19 +261,17 @@ func (e *Executor) getZlsVersion(version string) error {
 		return ReleaseNotExist
 	}
 
-	// "https://builds.zigtools.org/zls-x86_64-linux-0.17.0.tar.xz"
-	// url := "https://builds.zigtools.org/zls"
-
 	tarballUrl := artifact.Tarball
 	tarballName, err := getFilenameFromURL(tarballUrl)
 	if err != nil {
 		return err
 	}
 	tarballPath := filepath.Join(getShareDir(), tarballName)
-
-	err = DownloadFile(tarballUrl, tarballPath)
-	if err != nil {
-		return err
+	if !fileExists(tarballPath) {
+		err = DownloadFile(tarballUrl, tarballPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	minisigUrl := tarballUrl + ".minisig"
@@ -269,13 +281,16 @@ func (e *Executor) getZlsVersion(version string) error {
 		return err
 	}
 	minisigPath := filepath.Join(getShareDir(), minisigName)
-
-	err = DownloadFile(minisigUrl, minisigPath)
-	if err != nil {
-		return err
+	if !fileExists(minisigPath) {
+		err = DownloadFile(minisigUrl, minisigPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	publicKey := "RWR+9B91GBZ0zOjh6Lr17+zKf5BoSuFvrx2xSeDE57uIYvnKBGmMjOex"
+
+	println("Verifying downloaded files")
 
 	err = VerifyMinisig(tarballPath, minisigPath, publicKey)
 	if err != nil {
@@ -309,40 +324,35 @@ func (e *Executor) doSet(a []string) error {
 	version := a[1]
 	setZig := func(v string) error {
 		err := e.setZigVersion(v)
-		if err == nil {
-			return nil
-		}
 		if errors.Is(err, WasntDownloadedYet) {
 			err = e.getZigVersion(v)
+		}
+		if err == nil {
+			zigPath := filepath.Join(getBinDir(), "zig")
+			zigVPath := filepath.Join(getBinDir(), e.getExeName("zig", v))
+			err = Symlink(zigVPath, zigPath)
 			if err == nil {
-				zigPath := filepath.Join(getBinDir(), "zig")
-				zigVPath := filepath.Join(getBinDir(), e.getExeName("zig", v))
-				err = Symlink(zigVPath, zigPath)
-				if err != nil {
-					e.config.ZigVersion = v
-					e.config.Store()
-				}
+				e.config.ZigVersion = v
+				e.config.Store()
 			}
 		}
 		return err
 	}
 	setZls := func(v string) error {
 		err := e.setZlsVersion(v)
-		if err == nil {
-			return nil
-		}
 		if errors.Is(err, WasntDownloadedYet) {
 			err = e.getZlsVersion(v)
+		}
+		if err == nil {
+			zlsPath := filepath.Join(getBinDir(), "zls")
+			zlsVPath := filepath.Join(getBinDir(), e.getExeName("zls", v))
+			err = Symlink(zlsVPath, zlsPath)
 			if err == nil {
-				zlsPath := filepath.Join(getBinDir(), "zls")
-				zlsVPath := filepath.Join(getBinDir(), e.getExeName("zls", v))
-				err = Symlink(zlsVPath, zlsPath)
-				if err != nil {
-					e.config.ZlsVersion = v
-					e.config.Store()
-				}
+				e.config.ZlsVersion = v
+				e.config.Store()
 			}
 		}
+
 		return err
 	}
 	switch tool {
@@ -390,13 +400,35 @@ func (e *Executor) doList(a []string) error {
 		return NotEnoughArgs
 	}
 	listZig := func() {
-		for v, _ := range e.localversions.Zig {
-			fmt.Printf("[+] %s\n", v)
+		zigVersions := e.localversions.Zig
+		out := []*Version{}
+		for v, _ := range zigVersions {
+			version, err := NewVersion(v)
+			if err != nil {
+				continue
+			}
+			out = append(out, version)
+		}
+		slices.SortFunc(out, cmpVersions)
+
+		for _, v := range out {
+			fmt.Printf("[+] %s\n", v.String())
 		}
 	}
 	listZls := func() {
-		for v, _ := range e.localversions.Zls {
-			fmt.Printf("[+] %s\n", v)
+		zlsVersions := e.localversions.Zls
+		out := []*Version{}
+		for v, _ := range zlsVersions {
+			version, err := NewVersion(v)
+			if err != nil {
+				continue
+			}
+			out = append(out, version)
+		}
+		slices.SortFunc(out, cmpVersions)
+
+		for _, v := range out {
+			fmt.Printf("[+] %s\n", v.String())
 		}
 	}
 	tool := a[0]
@@ -411,6 +443,10 @@ func (e *Executor) doList(a []string) error {
 		println("Zls:")
 		listZls()
 	}
+	return nil
+}
+
+func (e *Executor) doRemove(a []string) error {
 	return nil
 }
 
@@ -486,6 +522,7 @@ func (e *Executor) parseCommand() {
 	mp := map[string](func([]string) error){
 		"set":     e.doSet,
 		"get":     e.doGet,
+		"remove":  e.doRemove,
 		"list":    e.doList,
 		"update":  e.doUpdate,
 		"mirrors": e.doMirrors,
@@ -509,6 +546,7 @@ func printHelp() {
 Actions:
   - set <zig/zls/toolchain(both)> <version> - set version to zig, zls or both if it is possible
   - get <zig/zls/toolchain(both)> <version> - get version to zig, zls or both if it is possible
+  - remove <zig/zls/toolchain(both)> <version> - remove version of zig, zls or both, setting zig to last local version
   - list <zig/zls/toolchain(both)> - list all versions
   - update - updates to last patch if on stable branch, uses last dev version if on master
   - mirrors update [mirror urls...] - update mirrors adding new mirrors to list using urls to lists
