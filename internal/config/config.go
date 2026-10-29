@@ -1,9 +1,11 @@
-package main
+package config
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"zvm/internal/dirs"
 )
 
 type Config struct {
@@ -11,8 +13,8 @@ type Config struct {
 	ZlsVersion string `json:"zls"`
 }
 
-func LoadConfig() (c Config, err error) {
-	configpath := filepath.Join(getConfigDir(), "config.json")
+func Load() (c Config, err error) {
+	configpath := filepath.Join(dirs.Config(), "config.json")
 	dat, err := os.ReadFile(configpath)
 	if err != nil {
 		return c, err
@@ -29,7 +31,7 @@ func (c *Config) Store() error {
 	if err != nil {
 		return err
 	}
-	fpath := filepath.Join(getConfigDir(), "config.json")
+	fpath := filepath.Join(dirs.Config(), "config.json")
 	f, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-package main
+package version
 
 import "fmt"
 
@@ -7,7 +7,7 @@ type Version struct {
 	Major, Minor, Patch uint32
 }
 
-func NewVersion(s string) (*Version, error) {
+func New(s string) (*Version, error) {
 	var v Version
 	if s == "master" {
 		v.Master = true
@@ -27,7 +27,8 @@ func (v *Version) String() string {
 	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 }
 
-func cmpVersions(a, b *Version) int {
+// Cmp orders versions newest first, master before everything.
+func Cmp(a, b *Version) int {
 	if a.Master && b.Master {
 		return 0
 	}

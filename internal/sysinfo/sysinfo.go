@@ -1,20 +1,16 @@
-package main
+package sysinfo
 
 import (
 	"fmt"
 	"runtime"
 )
 
-type SysInfo struct {
-	arch string
-	os   string
+type Info struct {
+	Arch string
+	OS   string
 }
 
-func (s SysInfo) String() string {
-	return fmt.Sprintf("%s-%s", s.arch, s.os)
-}
-
-func GetSysInfo() SysInfo {
+func Get() Info {
 	arch := map[string]string{
 		"386":     "x86",
 		"amd64":   "x86_64",
@@ -28,7 +24,11 @@ func GetSysInfo() SysInfo {
 		os = "macos"
 	}
 	if v, ok := arch[runtime.GOARCH]; ok {
-		return SysInfo{v, os}
+		return Info{v, os}
 	}
-	return SysInfo{runtime.GOARCH, os}
+	return Info{runtime.GOARCH, os}
+}
+
+func (s Info) String() string {
+	return fmt.Sprintf("%s-%s", s.Arch, s.OS)
 }

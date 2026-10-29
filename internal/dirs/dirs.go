@@ -1,11 +1,11 @@
-package main
+package dirs
 
 import (
 	"os"
 	"path/filepath"
 )
 
-func getConfigDir() string {
+func Config() string {
 	path, err := os.UserConfigDir()
 	if err != nil {
 		return "."
@@ -18,7 +18,7 @@ func getConfigDir() string {
 	return res
 }
 
-func getShareDir() string {
+func Share() string {
 	path, err := os.UserHomeDir()
 	if err != nil {
 		return "."
@@ -31,7 +31,7 @@ func getShareDir() string {
 	return res
 }
 
-func getBinDir() string {
+func Bin() string {
 	path, err := os.UserHomeDir()
 	if err != nil {
 		return "."

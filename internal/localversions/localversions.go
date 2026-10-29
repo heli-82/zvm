@@ -1,9 +1,11 @@
-package main
+package localversions
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"zvm/internal/dirs"
 )
 
 type LocalVersions struct {
@@ -11,9 +13,9 @@ type LocalVersions struct {
 	Zls map[string]string `json:"zls"`
 }
 
-func LoadLocalVersons() (l LocalVersions, err error) {
+func Load() (l LocalVersions, err error) {
 	l = LocalVersions{Zig: map[string]string{}, Zls: map[string]string{}}
-	versionspath := filepath.Join(getShareDir(), "versions.json")
+	versionspath := filepath.Join(dirs.Share(), "versions.json")
 	dat, err := os.ReadFile(versionspath)
 	if err != nil {
 		return l, err
@@ -30,7 +32,7 @@ func (l *LocalVersions) Store() error {
 	if err != nil {
 		return err
 	}
-	fpath := filepath.Join(getShareDir(), "versions.json")
+	fpath := filepath.Join(dirs.Share(), "versions.json")
 	f, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return err

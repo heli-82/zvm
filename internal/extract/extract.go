@@ -1,4 +1,4 @@
-package main
+package extract
 
 import (
 	"archive/tar"
@@ -17,14 +17,14 @@ var UnsupportedArchiveType = errors.New("Unsupported archive type")
 
 func Extract(archivePath, targetDir string) (string, error) {
 	if filepath.Ext(archivePath) == ".zip" {
-		return ExtractZip(archivePath, targetDir)
+		return Zip(archivePath, targetDir)
 	} else if filepath.Ext(archivePath) == ".xz" {
-		return ExtractTarXz(archivePath, targetDir)
+		return TarXz(archivePath, targetDir)
 	}
 	return "", UnsupportedArchiveType
 }
 
-func archiveBaseName(p string) string {
+func ArchiveBaseName(p string) string {
 	n := filepath.Base(p)
 	for _, s := range []string{".tar.xz", ".zip"} {
 		n = strings.TrimSuffix(n, s)
@@ -32,7 +32,7 @@ func archiveBaseName(p string) string {
 	return n
 }
 
-func ExtractTarXz(archivePath, targetDir string) (string, error) {
+func TarXz(archivePath, targetDir string) (string, error) {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open archive: %w", err)
@@ -99,7 +99,7 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 		name = entries[0].Name()
 		src = filepath.Join(tmp, name)
 	} else {
-		name = archiveBaseName(archivePath)
+		name = ArchiveBaseName(archivePath)
 		src = tmp
 		if err := os.Chmod(tmp, 0755); err != nil { // MkdirTemp makes it 0700
 			return "", err
@@ -116,7 +116,7 @@ func ExtractTarXz(archivePath, targetDir string) (string, error) {
 	return dst, nil
 }
 
-func ExtractZip(archivePath, targetDir string) (string, error) {
+func Zip(archivePath, targetDir string) (string, error) {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to open archive: %w", err)
