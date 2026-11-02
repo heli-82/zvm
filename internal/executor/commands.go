@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -54,7 +55,7 @@ func (e *Executor) DoGet(a []string) error {
 		err = e.GetZlsVersion(version)
 		return err
 	default:
-		return InvalidArgument
+		return fmt.Errorf("Invalid tool name: %s", tool)
 	}
 }
 
@@ -77,7 +78,7 @@ func (e *Executor) DoSet(a []string) error {
 		err = e.ActivateZls(version)
 		return err
 	default:
-		return InvalidArgument
+		return fmt.Errorf("Invalid tool name: %s", tool)
 	}
 }
 
@@ -96,12 +97,34 @@ func (e *Executor) DoList(a []string) error {
 		e.ListZig()
 		println("Zls:")
 		e.ListZls()
+	default:
+		return fmt.Errorf("Invalid tool name: %s", tool)
 	}
 	return nil
 }
 
-func (e *Executor) DoRemove(a []string) error {
-	return nil
+var VersionNotInstalled = errors.New("Version not installed")
+
+func (e *Executor) DoRemove(a []string) (err error) {
+	if len(a) < 2 {
+		return NotEnoughArgs
+	}
+	tool := a[0]
+	v := a[1]
+
+	switch tool {
+	case "zig":
+		err = e.removeZig(v)
+	case "zls":
+		err = e.removeZls(v)
+	case "toolchain":
+		err = e.removeZig(v)
+		if err != nil {
+			return err
+		}
+		err = e.removeZls(v)
+	}
+	return err
 }
 
 func (e *Executor) DoUpdate(a []string) error {

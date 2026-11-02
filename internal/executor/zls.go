@@ -3,6 +3,7 @@ package executor
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -76,6 +77,15 @@ func (e *Executor) GetZlsVersion(v string) error {
 		return err
 	}
 
+	err = os.Remove(tarballPath)
+	if err != nil {
+		println("Error deleting file: " + tarballPath)
+	}
+	err = os.Remove(minisigPath)
+	if err != nil {
+		println("Error deleting file: " + minisigPath)
+	}
+
 	zlsPath := filepath.Join(zlsDir, "zls")
 	exeName := e.ExeName("zls", v)
 	binPath := filepath.Join(dirs.Bin(), exeName)
@@ -131,6 +141,46 @@ func (e *Executor) ListZls() {
 	slices.SortFunc(out, version.Cmp)
 
 	for _, v := range out {
-		fmt.Printf("[+] %s\n", v.String())
+		if v.String() == e.Config.ZlsVersion {
+			fmt.Printf("[x]> %s\n", v.String())
+		} else {
+			fmt.Printf("[+] %s\n", v.String())
+		}
 	}
+}
+
+func (e *Executor) removeZls(v string) error {
+	dirPath, ok := e.LocalVersions.Zls[v]
+	if !ok {
+		return VersionNotInstalled
+	}
+	if e.Config.ZlsVersion == v { // set newest version available
+		out := []*version.Version{}
+		for v := range e.LocalVersions.Zls {
+			ver, err := version.New(v)
+			if err != nil {
+				continue
+			}
+			out = append(out, ver)
+		}
+		slices.SortFunc(out, version.Cmp)
+		if len(out) > 1 {
+			if v == out[0].String() {
+				e.SetZlsVersion(out[1].String())
+			} else {
+				e.SetZlsVersion(out[0].String())
+			}
+		} else {
+			os.Remove(filepath.Join(dirs.Bin(), "zls"))
+		}
+	}
+	symlinkPath := filepath.Join(dirs.Bin(), e.ExeName("zls", v))
+	os.Remove(symlinkPath)
+	err := os.RemoveAll(dirPath)
+	if err != nil {
+		return err
+	}
+	delete(e.LocalVersions.Zls, v)
+	e.LocalVersions.Store()
+	return nil
 }

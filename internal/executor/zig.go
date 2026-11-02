@@ -3,6 +3,7 @@ package executor
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -73,6 +74,14 @@ func (e *Executor) GetZigVersion(v string) error {
 	if err != nil {
 		return err
 	}
+	err = os.Remove(tarballPath)
+	if err != nil {
+		println("Error deleting file: " + tarballPath)
+	}
+	err = os.Remove(minisigPath)
+	if err != nil {
+		println("Error deleting file: " + minisigPath)
+	}
 
 	zigPath := filepath.Join(zigDir, "zig")
 	exeName := e.ExeName("zig", v)
@@ -129,6 +138,46 @@ func (e *Executor) ListZig() {
 	slices.SortFunc(out, version.Cmp)
 
 	for _, v := range out {
-		fmt.Printf("[+] %s\n", v.String())
+		if v.String() == e.Config.ZigVersion {
+			fmt.Printf("[x]> %s\n", v.String())
+		} else {
+			fmt.Printf("[+] %s\n", v.String())
+		}
 	}
+}
+
+func (e *Executor) removeZig(v string) error {
+	dirPath, ok := e.LocalVersions.Zig[v]
+	if !ok {
+		return VersionNotInstalled
+	}
+	if e.Config.ZigVersion == v { // set newest version available
+		out := []*version.Version{}
+		for v := range e.LocalVersions.Zig {
+			ver, err := version.New(v)
+			if err != nil {
+				continue
+			}
+			out = append(out, ver)
+		}
+		slices.SortFunc(out, version.Cmp)
+		if len(out) > 1 {
+			if v == out[0].String() {
+				e.SetZigVersion(out[1].String())
+			} else {
+				e.SetZigVersion(out[0].String())
+			}
+		} else {
+			os.Remove(filepath.Join(dirs.Bin(), "zig"))
+		}
+	}
+	symlinkPath := filepath.Join(dirs.Bin(), e.ExeName("zig", v))
+	os.Remove(symlinkPath)
+	err := os.RemoveAll(dirPath)
+	if err != nil {
+		return err
+	}
+	delete(e.LocalVersions.Zig, v)
+	e.LocalVersions.Store()
+	return nil
 }
